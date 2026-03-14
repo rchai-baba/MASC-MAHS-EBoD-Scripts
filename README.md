@@ -22,3 +22,5 @@ Need to edit:
 
 \[Main Chat](https://claude.ai/chat/e97d2f52-34d8-4ec1-845d-50e1956ca6c9)
 
+\[BOD Interviews Sheet](https://docs.google.com/spreadsheets/d/1CHWc2TQTwQ0dodv2Vbf-ld4L7RL6cyGWdfKqy2HTGo4/edit?gid=0#gid=0)
+
