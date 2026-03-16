@@ -1,68 +1,7 @@
 // ╔══════════════════════════════════════════════════════════════════════════════╗
-// ║  CALENDLY → EBOD/BOD INTERVIEW SHEET — Google Apps Script                 ║
+// ║  CALENDLY IMPORT — API + CSV modes                                        ║
+// ║  Uses CONFIG from Main.gs                                                 ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
-
-const CONFIG = {
-  CALENDLY_API_TOKEN: 'YOUR_API_KEY_HERE!!!',
-  SCHEDULE_SHEET_NAME: 'auto',
-  CSV_SHEET_NAME: 'CalendlyCSV',
-  DAYS_AHEAD: 80,
-  COL_DATE:       1,
-  COL_TIME:       2,
-  COL_EBOD:       3,
-  COL_BOD1:       4,
-  COL_BOD2:       5,
-  COL_NAME:       6,
-  COL_EMAIL:      7,
-  COL_PHONE:      8,
-  COL_SCORES:     9,
-  COL_ZOOM:      10,
-  DATA_START_ROW: 2,
-  EVENT_TYPE_FILTER: '',
-
-  // "Last Updated" timestamp — cell on the schedule sheet
-  LAST_UPDATED_CELL: 'L1',
-};
-
-function onOpen() {
-  SpreadsheetApp.getUi().createMenu('Calendly Import')
-    .addItem('Import from Calendly API', 'importFromCalendlyAPI')
-    .addItem('Import from pasted CSV', 'importFromCSV')
-    .addSeparator()
-    .addItem('Fill phone numbers', 'fillPhoneNumbers')
-    .addSeparator()
-    .addItem('Run full sync (Calendly + Phones)', 'runFullSync')
-    .addToUi();
-}
-
-
-// ═══════════════════════════════════════
-//  FULL SYNC — Calendly import → Phone lookup → Timestamp
-//  This is what the hourly trigger calls.
-// ═══════════════════════════════════════
-
-function runFullSync() {
-  Logger.log('========== runFullSync START ==========');
-  importFromCalendlyAPI();
-  fillPhoneNumbers();
-  stampLastUpdated_();
-  Logger.log('========== runFullSync COMPLETE ==========');
-}
-
-
-// ═══════════════════════════════════════
-//  LAST UPDATED TIMESTAMP
-// ═══════════════════════════════════════
-
-function stampLastUpdated_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
-  if (!sheet) return;
-  const now = new Date();
-  const ts = Utilities.formatDate(now, 'America/New_York', 'M/d/yyyy h:mm:ss a') + ' ET';
-  sheet.getRange(CONFIG.LAST_UPDATED_CELL).setValue('Last updated: ' + ts);
-  Logger.log('Stamped "' + ts + '" → ' + CONFIG.SCHEDULE_SHEET_NAME + '!' + CONFIG.LAST_UPDATED_CELL);
-}
 
 
 // ═══════════════════════════════════════
@@ -268,7 +207,6 @@ function importFromCSV() {
 
   Logger.log('');
   const count = writeEventsToSheet_(parsedEvents);
-  stampLastUpdated_();
   Logger.log('========== DONE — Matched ' + count + '/' + parsedEvents.length + ' ==========');
 }
 
@@ -399,51 +337,4 @@ function writeEventsToSheet_(events) {
   Logger.log('');
   Logger.log('RESULTS: matched=' + matchCount + ' noSlot=' + noSlot + ' total=' + events.length);
   return matchCount;
-}
-
-
-// ═══════════════════════════════════════
-//  UTILITIES
-// ═══════════════════════════════════════
-
-function get12Hour_(h) { return h === 0 ? 12 : h > 12 ? h - 12 : h; }
-function padZero_(n) { return n < 10 ? '0' + n : '' + n; }
-
-function parseCalendlyDateTime_(str) {
-  const m = str.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*(am|pm)/i);
-  if (!m) { Logger.log('    PARSE FAIL: "' + str + '"'); return null; }
-  let h = parseInt(m[4], 10);
-  const ampm = m[6].toLowerCase();
-  if (ampm === 'pm' && h !== 12) h += 12;
-  if (ampm === 'am' && h === 12) h = 0;
-  return new Date(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3]), h, parseInt(m[5]), 0);
-}
-
-function convertToEastern_(utcDate) {
-  const s = Utilities.formatDate(utcDate, 'America/New_York', 'yyyy-MM-dd HH:mm');
-  const p = s.split(/[-\s:]/);
-  return new Date(parseInt(p[0]), parseInt(p[1]) - 1, parseInt(p[2]), parseInt(p[3]), parseInt(p[4]), 0);
-}
-
-
-// ═══════════════════════════════════════
-//  AUTO-RUN TRIGGERS
-//  Run createHourlyTrigger() once from the script editor.
-//  It sets up runFullSync to fire every hour automatically.
-// ═══════════════════════════════════════
-
-function createHourlyTrigger() {
-  // Remove any existing triggers for runFullSync
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'runFullSync') ScriptApp.deleteTrigger(t);
-  });
-  ScriptApp.newTrigger('runFullSync').timeBased().everyHours(1).create();
-  Logger.log('Hourly trigger created for runFullSync');
-}
-
-function removeHourlyTrigger() {
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'runFullSync') ScriptApp.deleteTrigger(t);
-  });
-  Logger.log('Trigger removed');
 }
