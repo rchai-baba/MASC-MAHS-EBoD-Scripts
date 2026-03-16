@@ -3,7 +3,7 @@
 // ╚══════════════════════════════════════════════════════════════════════════════╝
 
 const CONFIG = {
-  CALENDLY_API_TOKEN: 'YOUR_API_KEY_HERE!!!'
+  CALENDLY_API_TOKEN: 'YOUR_API_KEY_HERE!!!',
   SCHEDULE_SHEET_NAME: 'auto',
   CSV_SHEET_NAME: 'CalendlyCSV',
   DAYS_AHEAD: 80,
@@ -19,14 +19,49 @@ const CONFIG = {
   COL_ZOOM:      10,
   DATA_START_ROW: 2,
   EVENT_TYPE_FILTER: '',
+
+  // "Last Updated" timestamp — cell on the schedule sheet
+  LAST_UPDATED_CELL: 'L1',
 };
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Calendly Import')
     .addItem('Import from Calendly API', 'importFromCalendlyAPI')
-    .addSeparator()
     .addItem('Import from pasted CSV', 'importFromCSV')
+    .addSeparator()
+    .addItem('Fill phone numbers', 'fillPhoneNumbers')
+    .addSeparator()
+    .addItem('Run full sync (Calendly + Phones)', 'runFullSync')
     .addToUi();
+}
+
+
+// ═══════════════════════════════════════
+//  FULL SYNC — Calendly import → Phone lookup → Timestamp
+//  This is what the hourly trigger calls.
+// ═══════════════════════════════════════
+
+function runFullSync() {
+  Logger.log('========== runFullSync START ==========');
+  importFromCalendlyAPI();
+  fillPhoneNumbers();
+  stampLastUpdated_();
+  Logger.log('========== runFullSync COMPLETE ==========');
+}
+
+
+// ═══════════════════════════════════════
+//  LAST UPDATED TIMESTAMP
+// ═══════════════════════════════════════
+
+function stampLastUpdated_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(CONFIG.SCHEDULE_SHEET_NAME);
+  if (!sheet) return;
+  const now = new Date();
+  const ts = Utilities.formatDate(now, 'America/New_York', 'M/d/yyyy h:mm:ss a') + ' ET';
+  sheet.getRange(CONFIG.LAST_UPDATED_CELL).setValue('Last updated: ' + ts);
+  Logger.log('Stamped "' + ts + '" → ' + CONFIG.SCHEDULE_SHEET_NAME + '!' + CONFIG.LAST_UPDATED_CELL);
 }
 
 
@@ -125,7 +160,6 @@ function importFromCSV() {
   Logger.log('Spreadsheet: ' + (ss ? ss.getName() : 'NULL!'));
   if (!ss) throw new Error('getActiveSpreadsheet() is null. Open this script from Extensions > Apps Script inside the Google Sheet.');
 
-  // List all tabs
   const allTabs = ss.getSheets().map(function(s) { return '"' + s.getName() + '"'; });
   Logger.log('All tabs: [' + allTabs.join(', ') + ']');
 
@@ -137,7 +171,6 @@ function importFromCSV() {
   Logger.log('CSV data: ' + data.length + ' rows, ' + (data[0] ? data[0].length : 0) + ' columns');
   if (data.length < 2) throw new Error('CSV sheet is empty.');
 
-  // Log raw first data row for debugging
   Logger.log('');
   Logger.log('RAW HEADER ROW (row 1):');
   for (let c = 0; c < Math.min(data[0].length, 15); c++) {
@@ -171,7 +204,6 @@ function importFromCSV() {
     throw new Error('Missing columns! Need "Invitee Name", "Invitee Email", "Start Date & Time". Got: ' + headers.join(', '));
   }
 
-  // Parse rows
   let parsedEvents = [];
   let skippedCanceled = 0, skippedFilter = 0, skippedParse = 0;
 
@@ -236,6 +268,7 @@ function importFromCSV() {
 
   Logger.log('');
   const count = writeEventsToSheet_(parsedEvents);
+  stampLastUpdated_();
   Logger.log('========== DONE — Matched ' + count + '/' + parsedEvents.length + ' ==========');
 }
 
@@ -266,7 +299,6 @@ function writeEventsToSheet_(events) {
   const dataRange = sheet.getRange(CONFIG.DATA_START_ROW, 1, numRows, CONFIG.COL_ZOOM);
   const sheetData = dataRange.getValues();
 
-  // Log first 5 raw schedule rows
   Logger.log('');
   Logger.log('FIRST 5 RAW SCHEDULE ROWS:');
   for (let i = 0; i < Math.min(5, sheetData.length); i++) {
@@ -278,7 +310,6 @@ function writeEventsToSheet_(events) {
       ' | name="' + nameVal + '"');
   }
 
-  // Build slot map
   Logger.log('');
   Logger.log('BUILDING SLOT MAP:');
   let slotMap = {};
@@ -292,7 +323,6 @@ function writeEventsToSheet_(events) {
 
     if (!dateCell || !timeCell) { skipCount++; continue; }
 
-    // Parse date
     const dateStr = String(dateCell);
     const dateMatch = dateStr.match(/\((\d{1,2})\/(\d{1,2})\)/);
     if (!dateMatch) {
@@ -303,14 +333,11 @@ function writeEventsToSheet_(events) {
     const sMonth = parseInt(dateMatch[1], 10);
     const sDay = parseInt(dateMatch[2], 10);
 
-    // Parse time
     let sHour, sMin;
     if (timeCell instanceof Date) {
       sHour = timeCell.getHours();
       sMin = timeCell.getMinutes();
     } else if (typeof timeCell === 'number') {
-      // Might be a serial number (fraction of day)
-      // 0.5 = 12:00, 0.0625 = 1:30, etc.
       const totalMinutes = Math.round(timeCell * 24 * 60);
       sHour = Math.floor(totalMinutes / 60);
       sMin = totalMinutes % 60;
@@ -342,7 +369,6 @@ function writeEventsToSheet_(events) {
   Logger.log('Slot map: ' + allKeys.length + ' unique keys, ' + slotCount + ' slots, ' + skipCount + ' skipped');
   Logger.log('Sample keys: [' + allKeys.slice(0, 20).join(', ') + ']');
 
-  // Match
   Logger.log('');
   Logger.log('MATCHING:');
   let matchCount = 0, noSlot = 0;
@@ -402,19 +428,22 @@ function convertToEastern_(utcDate) {
 
 // ═══════════════════════════════════════
 //  AUTO-RUN TRIGGERS
+//  Run createHourlyTrigger() once from the script editor.
+//  It sets up runFullSync to fire every hour automatically.
 // ═══════════════════════════════════════
 
 function createHourlyTrigger() {
+  // Remove any existing triggers for runFullSync
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'importFromCalendlyAPI') ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === 'runFullSync') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('importFromCalendlyAPI').timeBased().everyHours(1).create();
-  Logger.log('Hourly trigger created');
+  ScriptApp.newTrigger('runFullSync').timeBased().everyHours(1).create();
+  Logger.log('Hourly trigger created for runFullSync');
 }
 
 function removeHourlyTrigger() {
   ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'importFromCalendlyAPI') ScriptApp.deleteTrigger(t);
+    if (t.getHandlerFunction() === 'runFullSync') ScriptApp.deleteTrigger(t);
   });
   Logger.log('Trigger removed');
 }
